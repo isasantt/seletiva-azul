@@ -163,6 +163,7 @@ export default function TelaAdmin() {
           <FlatList
             data={malasFiltradas}
             keyExtractor={(item) => String(item.id_mala)}
+            style={styles.lista}
             contentContainerStyle={[styles.list, contentPlatformStyle]}
             ListEmptyComponent={<ThemedText>Nenhuma mala cadastrada.</ThemedText>}
             renderItem={({ item }) => (
@@ -193,6 +194,7 @@ export default function TelaAdmin() {
             {mensagem ? <ThemedText type="small">{mensagem}</ThemedText> : null}
             <Botao titulo="Salvar local" onPress={salvarLocal} />
             <Botao titulo="Vincular dono..." contorno onPress={() => setDonoAberto(true)} />
+            <Botao titulo="Dashboard" contorno onPress={() => router.replace('/admin-dashboard')} />
             <Botao titulo="Sair" contorno onPress={sair} />
           </Cartao>
         </ThemedView>
@@ -276,6 +278,11 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
     paddingHorizontal: Spacing.four,
     gap: Spacing.two,
+  },
+  // Largura total para a barra de rolagem ficar no canto direito da tela.
+  lista: {
+    flex: 1,
+    alignSelf: 'stretch',
   },
   list: {
     gap: Spacing.four,

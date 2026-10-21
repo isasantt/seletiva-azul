@@ -140,6 +140,7 @@ export default function TelaCliente() {
           <FlatList
             data={malas}
             keyExtractor={(item) => item.id_mala}
+            style={styles.lista}
             contentContainerStyle={[styles.list, contentPlatformStyle]}
             ListEmptyComponent={<ThemedText>Nenhuma mala vinculada a você.</ThemedText>}
             ListFooterComponent={
@@ -179,6 +180,11 @@ const styles = StyleSheet.create({
     marginTop: -24,
     alignItems: 'center',
     paddingTop: Spacing.four,
+  },
+  // Largura total para a barra de rolagem ficar no canto direito da tela.
+  lista: {
+    flex: 1,
+    alignSelf: 'stretch',
   },
   list: {
     gap: Spacing.four,

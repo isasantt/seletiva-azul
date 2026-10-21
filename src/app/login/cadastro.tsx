@@ -146,11 +146,11 @@ export default function TelaCadastro() {
       if (existente) {
         const atual = (existente as Record<string, string>)[CARGO_COLUMN];
         if (atual === 'funcionario') {
-          router.replace('/funcionario');
+          router.replace('/selecao-voo');
           return;
         }
         if (atual === 'admin') {
-          router.replace('/admin');
+          router.replace('/admin-dashboard');
           return;
         }
         // Cliente existente: só atualiza o nome

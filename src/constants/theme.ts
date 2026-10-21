@@ -16,6 +16,9 @@ export const Colors = {
     textSecondary: '#5A7A96',
     primary: '#0B2A4A',
     accent: '#2F9BC4',
+    danger: '#D92D20',
+    success: '#1B9E77',
+    warning: '#D97706',
   },
   dark: {
     text: '#FFFFFF',
@@ -25,6 +28,9 @@ export const Colors = {
     textSecondary: '#9DB8D2',
     primary: '#0B2A4A',
     accent: '#2F9BC4',
+    danger: '#F97066',
+    success: '#4ADE80',
+    warning: '#FBBF24',
   },
 } as const;
 

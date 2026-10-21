@@ -22,7 +22,7 @@ export default function AppTabs() {
         />
       </NativeTabs.Trigger>
 
-      <NativeTabs.Trigger name="funcionario">
+      <NativeTabs.Trigger name="selecao-voo">
         <NativeTabs.Trigger.Label>Funcionário</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon
           src={require('@/assets/images/tabIcons/home.png')}

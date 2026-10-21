@@ -119,9 +119,9 @@ export default function TelaLogin() {
       if (cargo === 'cliente') {
         router.replace('/cliente');
       } else if (cargo === 'funcionario') {
-        router.replace('/funcionario');
+        router.replace('/selecao-voo');
       } else if (cargo === 'admin') {
-        router.replace('/admin');
+        router.replace('/admin-dashboard');
       } else {
         setErro(`Cargo desconhecido: ${cargo}`);
       }
