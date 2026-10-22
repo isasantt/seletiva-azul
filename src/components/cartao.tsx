@@ -1,15 +1,29 @@
 import { StyleSheet, View, type ViewProps } from 'react-native';
 
-import { useTheme } from '@/hooks/use-theme';
 import { Spacing } from '@/constants/theme';
+import { useTheme } from '@/hooks/use-theme';
 
-// Cartão branco arredondado (estilo das referências).
-export function Cartao({ style, children, ...rest }: ViewProps) {
+type CartaoProps = ViewProps & {
+  /** Remove a sombra para cartões encaixados em painéis. */
+  plano?: boolean;
+};
+
+// Cartão arredondado com borda sutil — linguagem visual das referências.
+export function Cartao({ style, children, plano = false, ...rest }: CartaoProps) {
   const theme = useTheme();
 
   return (
     <View
-      style={[styles.cartao, { backgroundColor: theme.backgroundElement }, style]}
+      style={[
+        styles.cartao,
+        plano && styles.plano,
+        {
+          backgroundColor: theme.backgroundElement,
+          borderColor: theme.border,
+          shadowColor: theme.primary,
+        },
+        style,
+      ]}
       {...rest}>
       {children}
     </View>
@@ -18,13 +32,18 @@ export function Cartao({ style, children, ...rest }: ViewProps) {
 
 const styles = StyleSheet.create({
   cartao: {
-    borderRadius: Spacing.four,
-    padding: Spacing.four,
+    borderRadius: 26,
+    borderWidth: 1,
+    padding: Spacing.four - 4,
     gap: Spacing.two,
-    shadowColor: '#0B2A4A',
     shadowOpacity: 0.08,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 3,
+  },
+  plano: {
+    shadowOpacity: 0,
+    shadowRadius: 0,
+    elevation: 0,
   },
 });

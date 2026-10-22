@@ -1,20 +1,28 @@
 import { useState } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { Botao } from '@/components/botao';
 import { Cabecalho } from '@/components/cabecalho';
+import { CampoTexto } from '@/components/campo-texto';
 import { Cartao } from '@/components/cartao';
+import { Pill } from '@/components/pill';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { TituloSecao } from '@/components/titulo-secao';
 import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+import { garantirPerfilECalcularDestino } from '@/lib/destino';
+import { mensagemErro } from '@/lib/erros';
 import { useTheme } from '@/hooks/use-theme';
 import { supabase } from '@/supabase';
 import { router } from 'expo-router';
-
-const PERFIS_TABLE = 'usuarios_perfis';
-const ID_USUARIO_COLUMN = 'id_usuario'; // FK para auth.users.id
-const CARGO_COLUMN = 'cargo'; // valores: 'admin' | 'funcionario' | 'cliente'
 
 const TIMEOUT_MS = 15000;
 
@@ -35,6 +43,15 @@ function comTimeout<T>(promessa: PromiseLike<T>, etapa: string): Promise<T> {
   ]);
 }
 
+const CONTAS_DEMO = [
+  { email: 'cliente@gmail.com', senha: '123456', perfil: 'Passageiro' },
+  { email: 'funcionario@gmail.com', senha: '123456', perfil: 'Equipe' },
+  { email: 'admin@gmail.com', senha: '123456', perfil: 'Admin' },
+  { email: 'handling@gmail.com', senha: '123456', perfil: 'Handling' },
+  { email: 'sac.teste@gmail.com', senha: '123456', perfil: 'SAC' },
+  { email: 'cco.teste@gmail.com', senha: '123456', perfil: 'CCO' },
+];
+
 export default function TelaLogin() {
   const theme = useTheme();
 
@@ -49,174 +66,189 @@ export default function TelaLogin() {
 
   const [email, setEmail] = useState('');
   const [senha, setSenha] = useState('');
-  const [senhaVisivel, setSenhaVisivel] = useState(false);
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [usuarioNaoEncontrado, setUsuarioNaoEncontrado] = useState(false);
+  const [demoAtiva, setDemoAtiva] = useState<string | null>(null);
+  const [erroDemo, setErroDemo] = useState<string | null>(null);
 
-  async function lidarComLogin() {
-    setCarregando(true);
+  const ocupado = carregando || demoAtiva !== null;
+  const erroEmail =
+    email.length > 0 && !emailValido(email) ? 'Falta um e-mail válido (ex: nome@email.com).' : null;
+  const erroSenha = senha.length > 0 && senha.length < 6 ? 'A senha precisa de ao menos 6 caracteres.' : null;
+
+  async function entrarComCredenciais(
+    emailEntrada: string,
+    senhaEntrada: string,
+    origem: 'formulario' | 'demo',
+  ) {
+    const emailLimpo = emailEntrada.trim();
+    const mostrarErro = (mensagem: string) => {
+      if (origem === 'demo') setErroDemo(mensagem);
+      else setErro(mensagem);
+    };
+
     setErro(null);
+    setErroDemo(null);
     setUsuarioNaoEncontrado(false);
 
-    // Validação local antes de chamar o Supabase
-    if (!emailValido(email)) {
-      setErro('Digite um e-mail válido (ex: nome@email.com).');
-      setCarregando(false);
-      return;
-    }
-    if (senha.length < 6) {
-      setErro('A senha precisa de ao menos 6 caracteres.');
-      setCarregando(false);
-      return;
-    }
+    if (origem === 'demo') setDemoAtiva(emailLimpo);
+    else setCarregando(true);
 
     try {
       const { data, error } = await comTimeout(
         supabase.auth.signInWithPassword({
-          email: email.trim(),
-          password: senha,
+          email: emailLimpo,
+          password: senhaEntrada,
         }),
         'Login',
       );
 
       if (error) {
-        if (error.message.includes('Invalid login credentials')) {
-          setErro('Usuário não encontrado. Verifique o e-mail ou crie uma conta.');
-          setUsuarioNaoEncontrado(true);
+        const codigo = (error as { code?: string }).code;
+        if (
+          error.message.includes('Invalid login credentials') ||
+          codigo === 'invalid_credentials'
+        ) {
+          mostrarErro('E-mail ou senha inválidos. Verifique os dados ou crie uma conta.');
+          if (origem === 'formulario') setUsuarioNaoEncontrado(true);
+        } else if (error.message.toLowerCase().includes('email not confirmed')) {
+          mostrarErro(
+            'Este e-mail ainda não foi confirmado. Abra o link enviado para sua caixa de entrada.',
+          );
         } else {
-          setErro(error.message);
+          mostrarErro(mensagemErro(error, 'Não foi possível entrar. Tente novamente.'));
         }
         return;
       }
 
-      const userId = data.user?.id;
-      if (!userId) {
-        setErro('Login ok, mas sem usuário retornado.');
+      if (!data.user) {
+        mostrarErro('Login ok, mas sem usuário retornado.');
         return;
       }
 
-      const { data: perfil, error: erroPerfil } = await comTimeout(
-        supabase
-          .from(PERFIS_TABLE)
-          .select(`${CARGO_COLUMN}`)
-          .eq(ID_USUARIO_COLUMN, userId)
-          .maybeSingle(),
+      const destino = await comTimeout(
+        garantirPerfilECalcularDestino(data.user, emailLimpo.split('@')[0]),
         'Busca do perfil',
       );
 
-      if (erroPerfil) {
-        setErro(erroPerfil.message);
+      if (!destino) {
+        mostrarErro(
+          'Seu perfil ainda não tem uma área ou cargo configurado. Fale com o administrador.',
+        );
         return;
       }
 
-      if (!perfil) {
-        router.replace('/login/cadastro');
-        return;
-      }
-
-      const cargo = (perfil as Record<string, string>)[CARGO_COLUMN];
-      if (cargo === 'cliente') {
-        router.replace('/cliente');
-      } else if (cargo === 'funcionario') {
-        router.replace('/selecao-voo');
-      } else if (cargo === 'admin') {
-        router.replace('/admin-dashboard');
-      } else {
-        setErro(`Cargo desconhecido: ${cargo}`);
-      }
+      router.replace(destino);
     } catch (e) {
-      setErro(e instanceof Error ? e.message : 'Falha de rede. Verifique a internet.');
+      mostrarErro(mensagemErro(e, 'Falha de rede. Verifique a internet.'));
     } finally {
       setCarregando(false);
+      setDemoAtiva(null);
     }
+  }
+
+  async function lidarComLogin() {
+    setErro(null);
+    setUsuarioNaoEncontrado(false);
+
+    if (!emailValido(email)) {
+      setErro('Digite um e-mail válido (ex: nome@email.com).');
+      return;
+    }
+    if (senha.length < 6) {
+      setErro('A senha precisa de ao menos 6 caracteres.');
+      return;
+    }
+
+    await entrarComCredenciais(email, senha, 'formulario');
   }
 
   return (
     <ThemedView style={[styles.raiz, { backgroundColor: theme.primary }]}>
-      <Cabecalho titulo="Minhas Malas" subtitulo="Acompanhe sua bagagem em cada etapa" />
+      <Cabecalho titulo="AtmosBag" subtitulo="por Azul · Sua bagagem, em cada etapa do voo" />
 
-      <ScrollView style={[styles.folha, { backgroundColor: theme.background }]} contentContainerStyle={[styles.folhaDentro, contentPlatformStyle]}>
+      <ScrollView
+        style={[styles.folha, { backgroundColor: theme.background }]}
+        contentContainerStyle={[styles.folhaDentro, contentPlatformStyle]}
+        showsVerticalScrollIndicator={false}>
         <ThemedView style={styles.limite}>
-          <Cartao style={styles.aviso}>
-            <ThemedText type="smallBold">Contas para teste (toque para preencher)</ThemedText>
-            {[
-              { email: 'cliente@gmail.com', senha: '123456' },
-              { email: 'funcionario@gmail.com', senha: '123456' },
-              { email: 'admin@gmail.com', senha: '123456' },
-            ].map((c) => (
-              <Pressable
-                key={c.email}
-                onPress={() => {
-                  setEmail(c.email);
-                  setSenha(c.senha);
-                }}>
-                <ThemedText type="small">
-                  {c.email} / {c.senha}
-                </ThemedText>
-              </Pressable>
-            ))}
-          </Cartao>
+          <TituloSecao
+            eyebrow="ÁREA SEGURA"
+            titulo="Bem-vindo de volta"
+            descricao="Passageiros e equipe Azul entram por aqui para acompanhar a jornada da bagagem."
+          />
 
           <Cartao>
-            <TextInput
-              style={[styles.input, { backgroundColor: theme.background, color: theme.text, borderColor: theme.textSecondary }]}
-              placeholder="E-mail"
-              placeholderTextColor={theme.textSecondary}
+            <View style={styles.tituloCartao}>
+              <View
+                style={[
+                  styles.tituloIcone,
+                  { backgroundColor: theme.accentSoft, borderColor: theme.border },
+                ]}>
+                <Ionicons name="lock-closed-outline" size={20} color={theme.accent} />
+              </View>
+              <View style={styles.tituloCartaoTexto}>
+                <ThemedText type="smallBold">Acesse sua conta</ThemedText>
+                <ThemedText type="small" themeColor="textSecondary">
+                  Use o e-mail e a senha cadastrados.
+                </ThemedText>
+              </View>
+            </View>
+
+            <CampoTexto
+              rotulo="E-mail"
+              icone="mail-outline"
+              placeholder="nome@email.com"
               autoCapitalize="none"
+              autoComplete="email"
               keyboardType="email-address"
               value={email}
               onChangeText={setEmail}
+              erro={erroEmail}
+              editable={!ocupado}
             />
 
-            {email.length > 0 && !emailValido(email) ? (
-              <ThemedText type="small" style={{ color: 'red' }}>
-                ✗ Falta um e-mail válido (ex: nome@email.com).
-              </ThemedText>
-            ) : null}
+            <CampoTexto
+              rotulo="Senha"
+              icone="lock-closed-outline"
+              placeholder="Sua senha"
+              autoCapitalize="none"
+              autoComplete="current-password"
+              secureTextEntry
+              value={senha}
+              onChangeText={setSenha}
+              erro={erroSenha}
+              editable={!ocupado}
+            />
 
-            <View style={styles.senhaRow}>
-              <TextInput
+            {erro ? (
+              <View
                 style={[
-                  styles.input,
-                  styles.senhaInput,
-                  { backgroundColor: theme.background, color: theme.text, borderColor: theme.textSecondary },
-                ]}
-                placeholder="Senha"
-                placeholderTextColor={theme.textSecondary}
-                secureTextEntry={!senhaVisivel}
-                value={senha}
-                onChangeText={setSenha}
-              />
-              <Pressable
-                onPress={() => setSenhaVisivel((v) => !v)}
-                style={[styles.eyeButton, { backgroundColor: theme.background, borderColor: theme.textSecondary }]}>
-                <Ionicons
-                  name={senhaVisivel ? 'eye-off' : 'eye'}
-                  size={22}
-                  color={theme.textSecondary}
-                />
-              </Pressable>
-            </View>
-
-            {senha.length > 0 && senha.length < 6 ? (
-              <ThemedText type="small" style={{ color: 'red' }}>
-                ✗ A senha precisa de ao menos 6 caracteres.
-              </ThemedText>
+                  styles.alerta,
+                  { backgroundColor: `${theme.danger}10`, borderColor: `${theme.danger}35` },
+                ]}>
+                <Ionicons name="alert-circle-outline" size={17} color={theme.danger} />
+                <ThemedText type="small" style={{ color: theme.danger, flex: 1 }}>
+                  {erro}
+                </ThemedText>
+              </View>
             ) : null}
-
-            {erro ? <ThemedText type="small">{erro}</ThemedText> : null}
 
             <Botao
-              titulo={carregando ? 'Entrando...' : 'Entrar'}
+              titulo={carregando ? 'Entrando...' : 'Entrar na minha conta'}
+              icone={carregando ? undefined : 'log-in-outline'}
               onPress={lidarComLogin}
-              desabilitado={carregando || !emailValido(email) || senha.length < 6}
+              carregando={carregando}
+              desabilitado={ocupado || !emailValido(email) || senha.length < 6}
             />
 
             {usuarioNaoEncontrado ? (
               <Botao
-                titulo="Ir para cadastro"
+                titulo="Criar minha conta"
+                icone="person-add-outline"
                 contorno
+                desabilitado={ocupado}
                 onPress={() =>
                   router.replace({
                     pathname: '/login/cadastro',
@@ -226,8 +258,93 @@ export default function TelaLogin() {
               />
             ) : null}
 
-            <Botao titulo="Criar conta" contorno onPress={() => router.replace('/login/cadastro')} />
+            <Botao
+              titulo="Ainda não tenho conta"
+              icone="arrow-forward-outline"
+              contorno
+              desabilitado={ocupado}
+              onPress={() => router.replace('/login/cadastro')}
+            />
           </Cartao>
+
+          <Cartao style={styles.demoCartao}>
+            <View style={styles.demoCabecalho}>
+              <View style={[styles.demoIcone, { backgroundColor: theme.accentSoft }]}>
+                <Ionicons name="flask-outline" size={18} color={theme.accent} />
+              </View>
+              <View style={styles.demoTextos}>
+                <ThemedText type="smallBold">Contas de demonstração</ThemedText>
+                <ThemedText type="small" themeColor="textSecondary">
+                  Toque em uma conta para entrar direto nela.
+                </ThemedText>
+              </View>
+            </View>
+
+            {erroDemo ? (
+              <View
+                style={[
+                  styles.alerta,
+                  { backgroundColor: `${theme.danger}10`, borderColor: `${theme.danger}35` },
+                ]}>
+                <Ionicons name="alert-circle-outline" size={17} color={theme.danger} />
+                <ThemedText type="small" style={{ color: theme.danger, flex: 1 }}>
+                  {erroDemo}
+                </ThemedText>
+              </View>
+            ) : null}
+
+            {CONTAS_DEMO.map((conta) => {
+              const entrando = demoAtiva === conta.email;
+              return (
+                <Pressable
+                  key={conta.email}
+                  disabled={ocupado}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Entrar como ${conta.perfil}`}
+                  onPress={() => {
+                    setEmail(conta.email);
+                    setSenha(conta.senha);
+                    void entrarComCredenciais(conta.email, conta.senha, 'demo');
+                  }}
+                  style={({ pressed }) => [
+                    styles.demoLinha,
+                    {
+                      borderColor: entrando ? theme.accent : theme.border,
+                      backgroundColor: pressed ? theme.backgroundSelected : 'transparent',
+                      opacity: ocupado && !entrando ? 0.5 : 1,
+                    },
+                  ]}>
+                  <View style={[styles.demoAvatar, { backgroundColor: theme.background }]}>
+                    <Ionicons
+                      name={entrando ? 'log-in-outline' : 'person-outline'}
+                      size={14}
+                      color={entrando ? theme.accent : theme.textSecondary}
+                    />
+                  </View>
+                  <View style={styles.demoDados}>
+                    <ThemedText type="smallBold" numberOfLines={1}>
+                      {conta.email}
+                    </ThemedText>
+                    <ThemedText type="small" themeColor="textSecondary">
+                      senha {conta.senha}
+                    </ThemedText>
+                  </View>
+                  {entrando ? (
+                    <ActivityIndicator size="small" color={theme.accent} />
+                  ) : (
+                    <Pill texto={conta.perfil} cor={theme.accent} />
+                  )}
+                </Pressable>
+              );
+            })}
+          </Cartao>
+
+          <Pressable onPress={() => router.push('/')} style={styles.voltar}>
+            <Ionicons name="arrow-back" size={16} color={theme.textSecondary} />
+            <ThemedText type="small" themeColor="textSecondary">
+              Voltar para a página inicial
+            </ThemedText>
+          </Pressable>
         </ThemedView>
       </ScrollView>
     </ThemedView>
@@ -240,14 +357,14 @@ const styles = StyleSheet.create({
   },
   folha: {
     flex: 1,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    marginTop: -24,
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    marginTop: -28,
   },
   folhaDentro: {
     alignItems: 'center',
     paddingHorizontal: Spacing.four,
-    paddingTop: Spacing.four,
+    paddingTop: Spacing.five,
   },
   limite: {
     width: '100%',
@@ -255,28 +372,77 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
     gap: Spacing.three,
   },
-  aviso: {
-    borderLeftWidth: 4,
-    borderLeftColor: '#2F9BC4',
-  },
-  input: {
-    borderRadius: Spacing.three,
-    borderWidth: 1,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.two,
-    fontSize: 16,
-  },
-  senhaRow: {
+  tituloCartao: {
     flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    marginBottom: Spacing.one,
+  },
+  tituloIcone: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tituloCartaoTexto: {
+    flex: 1,
+    gap: 2,
+  },
+  alerta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    borderWidth: 1,
+    borderRadius: Spacing.three,
+    padding: Spacing.two + 2,
+  },
+  demoCartao: {
     gap: Spacing.two,
   },
-  senhaInput: {
-    flex: 1,
+  demoCabecalho: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    marginBottom: Spacing.one,
   },
-  eyeButton: {
-    borderRadius: Spacing.three,
-    borderWidth: 1,
-    paddingHorizontal: Spacing.three,
+  demoIcone: {
+    width: 38,
+    height: 38,
+    borderRadius: 13,
+    alignItems: 'center',
     justifyContent: 'center',
+  },
+  demoTextos: {
+    flex: 1,
+    gap: 2,
+  },
+  demoLinha: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    borderWidth: 1,
+    borderRadius: Spacing.three,
+    paddingHorizontal: Spacing.two + 2,
+    paddingVertical: Spacing.two,
+  },
+  demoAvatar: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  demoDados: {
+    flex: 1,
+    gap: 1,
+  },
+  voltar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'center',
+    gap: Spacing.one + 2,
+    paddingVertical: Spacing.two,
   },
 });

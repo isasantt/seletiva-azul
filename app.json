@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "gerenciamento-de-malas",
-    "slug": "gerenciamento-de-malas",
+    "name": "AtmosBag",
+    "slug": "atmosbag",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "gerenciamentodemalas",
+    "scheme": "atmosbag",
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon"
@@ -28,7 +28,7 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
+          "backgroundColor": "#002060",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }

@@ -1,16 +1,39 @@
 import { useEffect, useState, type ComponentProps } from 'react';
-import { ActivityIndicator, Platform, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Platform,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-import { Botao } from '@/components/botao';
 import { Cabecalho } from '@/components/cabecalho';
 import { Cartao } from '@/components/cartao';
+import { Indicador } from '@/components/indicador';
+import { PainelConformidadeIATA } from '@/components/painel-conformidade-iata';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+import { TituloSecao } from '@/components/titulo-secao';
+import { BottomTabInset, MaxContentWidth, Spacing, WebFont } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { nomeExibicao, useUsuarioAtual } from '@/hooks/use-usuario-atual';
+import { mensagemErro } from '@/lib/erros';
 import { supabase } from '@/supabase';
 import { router } from 'expo-router';
+
+type MalaResumo = {
+  id_mala: string;
+  id_voo: string | null;
+  data_abertura_rib: string | null;
+};
+
+type CheckpointResumo = {
+  id_mala: string;
+  evento_iata: string | null;
+};
 
 type AlertaAberto = {
   id_mala: string | null;
@@ -18,8 +41,8 @@ type AlertaAberto = {
 };
 
 type Contagens = {
-  total: number;
   emTransito: number;
+  entregues: number;
   comAlerta: number;
   extraviadas: number;
 };
@@ -35,75 +58,98 @@ type CardResumo = {
   cor: string;
 };
 
+type Atalho = {
+  titulo: string;
+  descricao: string;
+  icone: ComponentProps<typeof Ionicons>['name'];
+  cor: string;
+  onPress: () => void;
+};
+
+/**
+ * Critérios dos cards:
+ * - Em trânsito: mala vinculada a voo e sem checkpoint ENTREGA.
+ * - Entregues: mala com checkpoint ENTREGA.
+ * - Com alerta: mala distinta com alerta em aberto.
+ * - Extraviadas: mala com data_abertura_rib ou alerta de EXTRAVIO em aberto.
+ */
+async function buscarContagens(): Promise<ResultadoContagens> {
+  const [malasRes, checkpointsRes, alertasRes] = await Promise.all([
+    supabase.from('malas').select('id_mala, id_voo, data_abertura_rib'),
+    supabase.from('historico_checkpoints').select('id_mala, evento_iata'),
+    supabase.from('alertas').select('id_mala, tipo').is('resolvido_em', null),
+  ]);
+
+  const falha = malasRes.error ?? checkpointsRes.error ?? alertasRes.error;
+  if (falha) {
+    return {
+      contagens: null,
+      erro: mensagemErro(falha, 'Não foi possível carregar os indicadores. Tente novamente.'),
+    };
+  }
+
+  const malas = (malasRes.data ?? []) as MalaResumo[];
+  const checkpoints = (checkpointsRes.data ?? []) as CheckpointResumo[];
+  const alertas = (alertasRes.data ?? []) as AlertaAberto[];
+  const idsMalas = new Set(malas.map((mala) => String(mala.id_mala)));
+
+  const entregues = new Set(
+    checkpoints
+      .filter((ponto) => (ponto.evento_iata ?? '').trim().toUpperCase() === 'ENTREGA')
+      .map((ponto) => String(ponto.id_mala))
+      .filter((id) => idsMalas.has(id)),
+  );
+
+  const comAlerta = new Set<string>();
+  const extraviadas = new Set<string>();
+
+  for (const alerta of alertas) {
+    if (!alerta.id_mala) continue;
+    const idMala = String(alerta.id_mala);
+    if (!idsMalas.has(idMala)) continue;
+    comAlerta.add(idMala);
+    if ((alerta.tipo ?? '').toUpperCase().includes('EXTRAVIO')) {
+      extraviadas.add(idMala);
+    }
+  }
+
+  for (const mala of malas) {
+    if (mala.data_abertura_rib) extraviadas.add(String(mala.id_mala));
+  }
+
+  const emTransito = malas.filter(
+    (mala) => Boolean(mala.id_voo) && !entregues.has(String(mala.id_mala)),
+  ).length;
+
+  return {
+    contagens: {
+      emTransito,
+      entregues: entregues.size,
+      comAlerta: comAlerta.size,
+      extraviadas: extraviadas.size,
+    },
+    erro: null,
+  };
+}
+
 export default function AdminDashboardScreen() {
   const theme = useTheme();
+  const usuario = useUsuarioAtual();
 
   const contentPlatformStyle = Platform.select({
-    android: {
-      paddingBottom: BottomTabInset + Spacing.three,
-    },
-    web: {
-      paddingBottom: Spacing.four,
-    },
+    android: { paddingBottom: BottomTabInset + Spacing.three },
+    web: { paddingBottom: Spacing.four },
   });
 
   const [contagens, setContagens] = useState<Contagens>({
-    total: 0,
     emTransito: 0,
+    entregues: 0,
     comAlerta: 0,
     extraviadas: 0,
   });
   const [carregando, setCarregando] = useState(true);
   const [atualizando, setAtualizando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
-
-  /*
-   * Critérios dos cards (não existe coluna de status em malas):
-   * - Total de Malas: todas as linhas de malas.
-   * - Em Trânsito: malas com id_voo preenchido (já vinculadas a um voo).
-   * - Com Alerta: malas distintas com alerta em aberto (resolvido_em nulo).
-   * - Extraviadas: malas distintas com alerta em aberto do tipo EXTRAVIO.
-   */
-  async function buscarContagens(): Promise<ResultadoContagens> {
-    const [totalRes, transitoRes, alertasRes] = await Promise.all([
-      supabase.from('malas').select('id_mala', { count: 'exact', head: true }),
-      supabase
-        .from('malas')
-        .select('id_mala', { count: 'exact', head: true })
-        .not('id_voo', 'is', null),
-      supabase.from('alertas').select('id_mala, tipo').is('resolvido_em', null),
-    ]);
-
-    const falha = totalRes.error ?? transitoRes.error ?? alertasRes.error;
-    if (falha) {
-      return { contagens: null, erro: falha.message };
-    }
-
-    // Distinct por mala: um mesmo id_mala pode ter mais de um alerta aberto.
-    const malasComAlerta = new Set<string>();
-    const malasExtraviadas = new Set<string>();
-
-    for (const alerta of (alertasRes.data ?? []) as AlertaAberto[]) {
-      if (!alerta.id_mala) continue;
-
-      malasComAlerta.add(alerta.id_mala);
-
-      const tipo = (alerta.tipo ?? '').toUpperCase();
-      if (tipo.includes('EXTRAVIO')) {
-        malasExtraviadas.add(alerta.id_mala);
-      }
-    }
-
-    return {
-      contagens: {
-        total: totalRes.count ?? 0,
-        emTransito: transitoRes.count ?? 0,
-        comAlerta: malasComAlerta.size,
-        extraviadas: malasExtraviadas.size,
-      },
-      erro: null,
-    };
-  }
 
   function aplicar(resultado: ResultadoContagens) {
     if (resultado.contagens) {
@@ -121,10 +167,9 @@ export default function AdminDashboardScreen() {
       aplicar(await buscarContagens());
     }
 
-    inicial();
+    void inicial();
   }, []);
 
-  // Usado pelo pull-to-refresh e pelo botão: liga o indicador e recarrega.
   function atualizar() {
     setAtualizando(true);
     void buscarContagens().then(aplicar);
@@ -136,20 +181,52 @@ export default function AdminDashboardScreen() {
   }
 
   const cards: CardResumo[] = [
-    { chave: 'total', rotulo: 'Total de Malas', icone: 'cube-outline', cor: theme.accent },
-    { chave: 'emTransito', rotulo: 'Em Trânsito', icone: 'airplane-outline', cor: theme.success },
-    { chave: 'comAlerta', rotulo: 'Com Alerta', icone: 'warning-outline', cor: theme.warning },
+    { chave: 'emTransito', rotulo: 'Em trânsito', icone: 'airplane-outline', cor: theme.success },
+    { chave: 'entregues', rotulo: 'Entregues', icone: 'checkmark-done-outline', cor: theme.accent },
+    { chave: 'comAlerta', rotulo: 'Com alerta', icone: 'warning-outline', cor: theme.warning },
     { chave: 'extraviadas', rotulo: 'Extraviadas', icone: 'alert-circle-outline', cor: theme.danger },
+  ];
+
+  const atalhos: Atalho[] = [
+    {
+      titulo: 'Gerenciar malas',
+      descricao: 'Buscar, editar e conferir checkpoints.',
+      icone: 'bag-handle-outline',
+      cor: theme.accent,
+      onPress: () => router.push('/admin'),
+    },
+    {
+      titulo: 'Atualizar painel',
+      descricao: 'Recarregar os indicadores em tempo real.',
+      icone: 'refresh-outline',
+      cor: theme.success,
+      onPress: atualizar,
+    },
+    {
+      titulo: 'Encerrar sessão',
+      descricao: 'Sair com segurança desta conta.',
+      icone: 'log-out-outline',
+      cor: theme.danger,
+      onPress: sair,
+    },
   ];
 
   return (
     <ThemedView style={[styles.raiz, { backgroundColor: theme.primary }]}>
-      <Cabecalho titulo="Dashboard" subtitulo="Visão geral das malas e alertas" />
+      <Cabecalho
+        variante="app"
+        eyebrow="CENTRAL DE CONTROLE"
+        icone="speedometer-outline"
+        titulo="Dashboard"
+        subtitulo="Visão geral das malas, alertas e conformidade IATA."
+        usuario={nomeExibicao(usuario)}
+      />
 
       <ThemedView style={[styles.folha, { backgroundColor: theme.background }]}>
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={[styles.conteudo, contentPlatformStyle]}
+          showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl
               refreshing={atualizando}
@@ -162,34 +239,85 @@ export default function AdminDashboardScreen() {
             <ActivityIndicator size="large" color={theme.accent} style={styles.carga} />
           ) : (
             <>
+              <TituloSecao
+                eyebrow="VISÃO GERAL"
+                titulo="A operação em números"
+                descricao="Indicadores calculados a partir das malas, checkpoints e alertas abertos."
+                acao={
+                  <View
+                    style={[
+                      styles.onlinePill,
+                      { backgroundColor: `${theme.success}12`, borderColor: `${theme.success}35` },
+                    ]}>
+                    <View style={[styles.onlineDot, { backgroundColor: theme.success }]} />
+                    <ThemedText type="small" style={{ color: theme.success, fontWeight: '700' }}>
+                      Atualizado
+                    </ThemedText>
+                  </View>
+                }
+              />
+
               <View style={styles.grade}>
                 {cards.map((card) => (
-                  <Cartao key={card.chave} style={styles.card}>
-                    <View style={[styles.icone, { backgroundColor: `${card.cor}1F` }]}>
-                      <Ionicons name={card.icone} size={22} color={card.cor} />
-                    </View>
-                    <ThemedText style={[styles.numero, { color: theme.text }]}>
-                      {contagens[card.chave]}
-                    </ThemedText>
-                    <ThemedText type="small" themeColor="textSecondary">
-                      {card.rotulo}
-                    </ThemedText>
-                  </Cartao>
+                  <Indicador
+                    key={card.chave}
+                    valor={contagens[card.chave]}
+                    rotulo={card.rotulo}
+                    icone={card.icone}
+                    cor={card.cor}
+                  />
                 ))}
               </View>
 
               {erro ? (
-                <ThemedText type="small" style={{ color: theme.danger }}>
-                  {erro}
-                </ThemedText>
+                <View
+                  style={[
+                    styles.alerta,
+                    { backgroundColor: `${theme.danger}10`, borderColor: `${theme.danger}35` },
+                  ]}>
+                  <Ionicons name="alert-circle-outline" size={17} color={theme.danger} />
+                  <ThemedText type="small" style={{ color: theme.danger, flex: 1 }}>
+                    {erro}
+                  </ThemedText>
+                </View>
               ) : null}
 
-              <Cartao>
-                <ThemedText type="smallBold">Atalhos</ThemedText>
-                <Botao titulo="Atualizar" contorno onPress={atualizar} />
-                <Botao titulo="Gerenciar malas" onPress={() => router.push('/admin')} />
-                <Botao titulo="Sair" contorno onPress={sair} />
-              </Cartao>
+              <PainelConformidadeIATA />
+
+              <TituloSecao
+                eyebrow="AÇÕES RÁPIDAS"
+                titulo="O que você precisa agora?"
+                descricao="Atalhos para as tarefas mais frequentes da operação."
+              />
+
+              <View style={styles.atalhos}>
+                {atalhos.map((atalho) => (
+                  <Pressable
+                    key={atalho.titulo}
+                    accessibilityRole="button"
+                    accessibilityLabel={atalho.titulo}
+                    onPress={atalho.onPress}
+                    style={({ pressed }) => [
+                      styles.atalhoPress,
+                      { opacity: pressed ? 0.78 : 1 },
+                    ]}>
+                    <Cartao style={styles.atalhoCard}>
+                      <View style={styles.atalhoTopo}>
+                        <View style={[styles.atalhoIcone, { backgroundColor: `${atalho.cor}16` }]}>
+                          <Ionicons name={atalho.icone} size={20} color={atalho.cor} />
+                        </View>
+                        <Ionicons name="arrow-forward-outline" size={16} color={theme.textSecondary} />
+                      </View>
+                      <ThemedText style={[styles.atalhoTitulo, { fontFamily: WebFont }]}>
+                        {atalho.titulo}
+                      </ThemedText>
+                      <ThemedText type="small" themeColor="textSecondary">
+                        {atalho.descricao}
+                      </ThemedText>
+                    </Cartao>
+                  </Pressable>
+                ))}
+              </View>
             </>
           )}
         </ScrollView>
@@ -204,9 +332,9 @@ const styles = StyleSheet.create({
   },
   folha: {
     flex: 1,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    marginTop: -24,
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    marginTop: -28,
     alignItems: 'center',
     paddingTop: Spacing.four,
   },
@@ -219,32 +347,68 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     paddingHorizontal: Spacing.four,
     paddingTop: Spacing.two,
-    gap: Spacing.three,
+    gap: Spacing.four,
   },
   grade: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: Spacing.three,
+    gap: Spacing.two,
   },
-  card: {
-    flexBasis: '46%',
+  onlinePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one + 2,
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: Spacing.two + 2,
+    paddingVertical: Spacing.one + 1,
+  },
+  onlineDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 999,
+  },
+  alerta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    borderWidth: 1,
+    borderRadius: Spacing.three,
+    padding: Spacing.two + 2,
+  },
+  atalhos: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.two,
+  },
+  atalhoPress: {
+    flexBasis: '45%',
     flexGrow: 1,
     minWidth: 140,
-    padding: Spacing.three,
-    gap: Spacing.one,
   },
-  icone: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  atalhoCard: {
+    height: '100%',
+    gap: Spacing.one + 2,
+    padding: Spacing.three,
+  },
+  atalhoTopo: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'space-between',
     marginBottom: Spacing.one,
   },
-  numero: {
-    fontSize: 34,
-    lineHeight: 40,
-    fontWeight: '700',
+  atalhoIcone: {
+    width: 38,
+    height: 38,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  atalhoTitulo: {
+    fontSize: 16,
+    lineHeight: 21,
+    fontWeight: '800',
+    letterSpacing: -0.2,
   },
   carga: {
     marginTop: Spacing.six,

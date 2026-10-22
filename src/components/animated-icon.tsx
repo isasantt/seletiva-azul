@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/refs -- o callback do worklet usa hide fora do render */
 import { Image } from 'expo-image';
 import * as SplashScreen from 'expo-splash-screen';
 import { useCallback, useEffect, useRef, useState } from 'react';

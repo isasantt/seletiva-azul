@@ -1,13 +1,19 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, Platform, StyleSheet } from 'react-native';
+import { ActivityIndicator, FlatList, Platform, StyleSheet, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 import { Botao } from '@/components/botao';
 import { Cabecalho } from '@/components/cabecalho';
 import { Cartao } from '@/components/cartao';
+import { EstadoVazio } from '@/components/estado-vazio';
+import { Pill } from '@/components/pill';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+import { TituloSecao } from '@/components/titulo-secao';
+import { BottomTabInset, MaxContentWidth, Spacing, WebFont } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { nomeExibicao, useUsuarioAtual } from '@/hooks/use-usuario-atual';
+import { mensagemErro } from '@/lib/erros';
 import { supabase } from '@/supabase';
 import { router } from 'expo-router';
 
@@ -37,6 +43,7 @@ function formatarPartida(iso: string | null): string {
 
 export default function SelecaoVooScreen() {
   const theme = useTheme();
+  const usuario = useUsuarioAtual();
 
   const contentPlatformStyle = Platform.select({
     android: {
@@ -59,7 +66,7 @@ export default function SelecaoVooScreen() {
         .order('partida_prevista', { ascending: true });
 
       if (error) {
-        setErro(error.message);
+        setErro(mensagemErro(error, 'Não foi possível carregar os voos. Tente novamente.'));
       }
       setVoos((data ?? []) as Voo[]);
       setCarregando(false);
@@ -84,53 +91,175 @@ export default function SelecaoVooScreen() {
     });
   }
 
+  function corDoStatus(voo: Voo): string {
+    const status = (voo.status_voo ?? '').toLowerCase();
+    if (status.includes('cancel')) return theme.danger;
+    if (status.includes('atras') || (voo.atraso_min ?? 0) > 0) return theme.warning;
+    if (status.includes('embar') || status.includes('pontual') || status.includes('conclu')) {
+      return theme.success;
+    }
+    return theme.accent;
+  }
+
   return (
     <ThemedView style={[styles.raiz, { backgroundColor: theme.primary }]}>
-      <Cabecalho titulo="Selecionar voo" subtitulo="Handling — escolha o voo antes de escanear" />
+      <Cabecalho
+        variante="app"
+        eyebrow="OPERAÇÃO EM SOLO"
+        icone="airplane-outline"
+        titulo="Selecionar voo"
+        subtitulo="Escolha o voo atual antes de escanear e registrar os checkpoints."
+        usuario={nomeExibicao(usuario)}
+      />
 
       <ThemedView style={[styles.folha, { backgroundColor: theme.background }]}>
         {carregando ? (
-          <ActivityIndicator size="large" style={styles.carga} />
+          <ActivityIndicator size="large" color={theme.accent} style={styles.carga} />
         ) : (
           <FlatList
             data={voos}
             keyExtractor={(item) => item.id}
             style={styles.lista}
             contentContainerStyle={[styles.list, contentPlatformStyle]}
+            showsVerticalScrollIndicator={false}
+            ListHeaderComponent={
+              <View style={styles.cabecalhoLista}>
+                <TituloSecao
+                  eyebrow="VOOS DISPONÍVEIS"
+                  titulo="Qual voo vamos acompanhar?"
+                  descricao="A seleção abre o scanner já vinculado ao voo escolhido."
+                  acao={
+                    <Pill
+                      texto={`${voos.length} voo${voos.length === 1 ? '' : 's'}`}
+                      cor={theme.accent}
+                      icone="list-outline"
+                    />
+                  }
+                />
+
+                {erro ? (
+                  <View
+                    style={[
+                      styles.alerta,
+                      { backgroundColor: `${theme.danger}10`, borderColor: `${theme.danger}35` },
+                    ]}>
+                    <Ionicons name="alert-circle-outline" size={17} color={theme.danger} />
+                    <ThemedText type="small" style={{ color: theme.danger, flex: 1 }}>
+                      {erro}
+                    </ThemedText>
+                  </View>
+                ) : null}
+              </View>
+            }
             ListEmptyComponent={
-              <ThemedText>Nenhum voo disponível. Confira a tabela voos no Supabase.</ThemedText>
+              <EstadoVazio
+                icone="airplane-outline"
+                titulo="Nenhum voo disponível"
+                descricao="Confira a tabela de voos no Supabase ou tente novamente em instantes."
+              />
             }
             ListFooterComponent={
-              <ThemedView style={styles.rodape}>
-                <Botao titulo="Sair" contorno onPress={sair} />
-              </ThemedView>
+              <View style={styles.rodape}>
+                <Botao
+                  titulo="Sair da conta"
+                  icone="log-out-outline"
+                  contorno
+                  onPress={sair}
+                />
+              </View>
             }
-            renderItem={({ item }) => (
-              <Cartao>
-                <ThemedText type="smallBold">
-                  {item.codigo_voo ?? 'Voo sem código'} • {item.tipo_voo ?? 'tipo não informado'}
-                </ThemedText>
-                <ThemedText type="small">
-                  {item.origem ?? '?'} → {item.destino ?? '?'}
-                </ThemedText>
-                <ThemedText type="small" themeColor="textSecondary">
-                  Partida: {formatarPartida(item.partida_prevista)}
-                  {item.atraso_min ? ` • atraso ${item.atraso_min} min` : ''}
-                </ThemedText>
-                <ThemedText type="small" style={{ color: theme.accent }}>
-                  {item.status_voo ?? 'status não informado'}
-                </ThemedText>
-                <Botao titulo="Selecionar este voo" onPress={() => selecionar(item)} />
-              </Cartao>
-            )}
+            renderItem={({ item }) => {
+              const corStatus = corDoStatus(item);
+              return (
+                <Cartao style={styles.cartaoVoo}>
+                  <View style={styles.topoVoo}>
+                    <View style={styles.codigoWrap}>
+                      <View
+                        style={[
+                          styles.vooIcone,
+                          { backgroundColor: theme.accentSoft, borderColor: theme.border },
+                        ]}>
+                        <Ionicons name="airplane-outline" size={20} color={theme.accent} />
+                      </View>
+                      <View style={styles.codigoTextos}>
+                        <ThemedText style={[styles.codigo, { fontFamily: WebFont }]}>
+                          {item.codigo_voo ?? 'Voo sem código'}
+                        </ThemedText>
+                        <ThemedText type="small" themeColor="textSecondary">
+                          {item.tipo_voo ?? 'tipo não informado'}
+                        </ThemedText>
+                      </View>
+                    </View>
+                    <Pill
+                      texto={item.status_voo ?? 'Sem status'}
+                      cor={corStatus}
+                      icone="ellipse"
+                    />
+                  </View>
+
+                  <View style={styles.rota}>
+                    <View style={styles.aeroporto}>
+                      <ThemedText style={[styles.sigla, { fontFamily: WebFont }]} numberOfLines={1}>
+                        {item.origem ?? '?'}
+                      </ThemedText>
+                      <ThemedText type="small" themeColor="textSecondary">
+                        Origem
+                      </ThemedText>
+                    </View>
+
+                    <View style={styles.rotaMeio}>
+                      <View style={[styles.rotaLinha, { backgroundColor: theme.border }]} />
+                      <View style={[styles.rotaAviao, { backgroundColor: theme.accentSoft }]}>
+                        <Ionicons name="airplane" size={15} color={theme.accent} />
+                      </View>
+                      <View style={[styles.rotaLinha, { backgroundColor: theme.border }]} />
+                    </View>
+
+                    <View style={[styles.aeroporto, styles.aeroportoDireita]}>
+                      <ThemedText style={[styles.sigla, { fontFamily: WebFont }]} numberOfLines={1}>
+                        {item.destino ?? '?'}
+                      </ThemedText>
+                      <ThemedText type="small" themeColor="textSecondary">
+                        Destino
+                      </ThemedText>
+                    </View>
+                  </View>
+
+                  <View style={[styles.metaVoo, { backgroundColor: theme.background }]}>
+                    <View style={styles.metaItem}>
+                      <Ionicons name="calendar-outline" size={15} color={theme.textSecondary} />
+                      <ThemedText type="small" themeColor="textSecondary">
+                        {formatarPartida(item.partida_prevista)}
+                      </ThemedText>
+                    </View>
+                    {item.atraso_min ? (
+                      <View style={styles.metaItem}>
+                        <Ionicons name="time-outline" size={15} color={theme.warning} />
+                        <ThemedText type="small" style={{ color: theme.warning }}>
+                          Atraso de {item.atraso_min} min
+                        </ThemedText>
+                      </View>
+                    ) : (
+                      <View style={styles.metaItem}>
+                        <Ionicons name="checkmark-circle-outline" size={15} color={theme.success} />
+                        <ThemedText type="small" style={{ color: theme.success }}>
+                          Sem atraso registrado
+                        </ThemedText>
+                      </View>
+                    )}
+                  </View>
+
+                  <Botao
+                    titulo="Escanear este voo"
+                    icone="scan-outline"
+                    iconeDireita="arrow-forward-outline"
+                    onPress={() => selecionar(item)}
+                  />
+                </Cartao>
+              );
+            }}
           />
         )}
-
-        {erro ? (
-          <ThemedText type="small" style={[styles.erro, { color: theme.danger }]}>
-            {erro}
-          </ThemedText>
-        ) : null}
       </ThemedView>
     </ThemedView>
   );
@@ -142,9 +271,9 @@ const styles = StyleSheet.create({
   },
   folha: {
     flex: 1,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    marginTop: -24,
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    marginTop: -28,
     alignItems: 'center',
     paddingTop: Spacing.four,
   },
@@ -162,15 +291,99 @@ const styles = StyleSheet.create({
     maxWidth: MaxContentWidth,
     alignSelf: 'center',
   },
+  cabecalhoLista: {
+    gap: Spacing.three,
+  },
+  alerta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    borderWidth: 1,
+    borderRadius: Spacing.three,
+    padding: Spacing.two + 2,
+  },
+  cartaoVoo: {
+    gap: Spacing.three,
+  },
+  topoVoo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.two,
+  },
+  codigoWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    flex: 1,
+  },
+  vooIcone: {
+    width: 44,
+    height: 44,
+    borderRadius: 15,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  codigoTextos: {
+    flex: 1,
+    gap: 1,
+  },
+  codigo: {
+    fontSize: 20,
+    lineHeight: 25,
+    fontWeight: '800',
+    letterSpacing: -0.4,
+  },
+  rota: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  aeroporto: {
+    flex: 1,
+    gap: 1,
+  },
+  aeroportoDireita: {
+    alignItems: 'flex-end',
+  },
+  sigla: {
+    fontSize: 18,
+    lineHeight: 23,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+  },
+  rotaMeio: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    width: 84,
+  },
+  rotaLinha: {
+    flex: 1,
+    height: 1.5,
+  },
+  rotaAviao: {
+    width: 27,
+    height: 27,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  metaVoo: {
+    borderRadius: Spacing.three,
+    padding: Spacing.two + 2,
+    gap: Spacing.one + 2,
+  },
+  metaItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one + 2,
+  },
   rodape: {
     paddingVertical: Spacing.four,
-    backgroundColor: 'transparent',
   },
   carga: {
     marginTop: Spacing.six,
-  },
-  erro: {
-    paddingHorizontal: Spacing.four,
-    paddingBottom: Spacing.four,
   },
 });
